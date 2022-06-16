@@ -21,6 +21,18 @@
 #define unlikely(x)     (x)
 #endif
 
+#if MAXLOGLEVEL != LOGL_NONE
+
+static const char *log_strings[] = {
+    "none",
+    "(unused)",
+    "ERROR",
+    "WARNING",
+    "info",
+    "debug",
+    "trace"
+};
+
 /**
  * Compares two strings byte by byte and ignores the
  * character's case. Stops at the n-th byte of both
@@ -244,3 +256,4 @@ getLogLevel(const char *module, log_level logdefault)
     }
     return loglevel;
 }
+#endif

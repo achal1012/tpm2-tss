@@ -1322,7 +1322,7 @@ iesys_gen_auths(ESYS_CONTEXT * esys_context,
                 auths->auths[auths->count].hmac.size = 0;
                 auths->count += 1;
             } else {
-                auths->auths[auths->count].sessionHandle = TPM2_RS_PW;
+                auths->auths[auths->count].sessionHandle = TPM2_RH_PW;
                 auths->auths[auths->count].hmac = objects[session_idx]->auth;
                 auths->count += 1;
             }
@@ -1352,7 +1352,7 @@ iesys_gen_auths(ESYS_CONTEXT * esys_context,
                                 && encryptNonceIdx > 0) ? encryptNonce : NULL,
                                &auths->auths[session_idx]);
         return_if_error(r, "Error while computing hmacs");
-        if (esys_context->session_tab[session_idx] != NULL) {
+        if (esys_context->session_tab[session_idx] != NULL && session != NULL) {
             auths->auths[auths->count].sessionHandle = session->rsrc.handle;
             auths->count++;
         }

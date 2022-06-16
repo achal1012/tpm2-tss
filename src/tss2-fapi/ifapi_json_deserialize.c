@@ -169,12 +169,20 @@ ifapi_json_IFAPI_KEY_deserialize(json_object *jso,  IFAPI_KEY *out)
         memset(&out->creationData, 0, sizeof(TPM2B_CREATION_DATA));
     }
 
+    if (ifapi_get_sub_object(jso, "creationHash", &jso2)) {
+        r = ifapi_json_TPM2B_DIGEST_deserialize(jso2, &out->creationHash);
+        return_if_error(r, "Bad value for field \"creationHash\".");
+
+    } else {
+        memset(&out->creationHash, 0, sizeof(TPM2B_DIGEST));
+    }
+
     if (ifapi_get_sub_object(jso, "creationTicket", &jso2)) {
         r = ifapi_json_TPMT_TK_CREATION_deserialize(jso2, &out->creationTicket);
         return_if_error(r, "Bad value for field \"creationTicket\".");
 
     } else {
-        memset(&out->creationData, 0, sizeof(TPMT_TK_CREATION));
+        memset(&out->creationTicket, 0, sizeof(TPMT_TK_CREATION));
     }
     if (!ifapi_get_sub_object(jso, "description", &jso2)) {
         LOG_ERROR("Field \"description\" not found.");
@@ -663,8 +671,6 @@ ifapi_json_IFAPI_OBJECT_deserialize(json_object *jso, IFAPI_OBJECT *out)
         return TSS2_FAPI_RC_BAD_VALUE;
     }
 
-    out->rel_path = NULL;
-
     r = ifapi_json_IFAPI_OBJECT_TYPE_CONSTANT_deserialize(jso2, &out->objectType);
     return_if_error(r, "Bad value for field \"objectType\".");
 
@@ -689,6 +695,9 @@ ifapi_json_IFAPI_OBJECT_deserialize(json_object *jso, IFAPI_OBJECT *out)
     case IFAPI_HIERARCHY_OBJ:
         r = ifapi_json_IFAPI_HIERARCHY_deserialize(jso, &out->misc.hierarchy);
         return_if_error(r, "Bad value for hierarchy.");
+
+        r = ifapi_set_name_hierarchy_object(out);
+        return_if_error(r, "Bad hierarchy.");
 
         break;
     case IFAPI_KEY_OBJ:

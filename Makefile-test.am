@@ -4,8 +4,9 @@
 # All rights reserved.
 
 TESTS_CFLAGS = $(AM_CFLAGS) $(CRYPTO_CFLAGS) -I$(srcdir)/include -I$(srcdir)/src/tss2-mu \
-    -I$(srcdir)/src/tss2-sys -I$(srcdir)/src/tss2-esys  -I$(srcdir)/src/tss2-fapi \
-    -Wno-unused-parameter -Wno-missing-field-initializers
+    -I$(srcdir)/src/tss2-sys -I$(srcdir)/src/tss2-esys -I$(srcdir)/src/tss2-fapi \
+    -I$(srcdir)/test/data -Wno-unused-parameter -Wno-missing-field-initializers \
+    -DTOP_SOURCEDIR"=\"$(top_srcdir)\""
 TESTS_LDADD = $(check_LTLIBRARIES) $(lib_LTLIBRARIES) \
     $(CRYPTO_LIBS) $(libutil)
 
@@ -218,6 +219,7 @@ ESYS_TESTS_INTEGRATION_MANDATORY = \
     test/integration/esys-event-sequence-complete.int \
     test/integration/esys-evict-control-serialization.int \
     test/integration/esys-get-capability.int \
+    test/integration/esys-get-capability-act.int \
     test/integration/esys-get-random.int \
     test/integration/esys-hash.int \
     test/integration/esys-hashsequencestart.int \
@@ -306,7 +308,6 @@ endif #ESYS
 
 if FAPI
 TESTS_LDADD += $(JSONC_LIBS)
-TESTS_CFLAGS +=  -DTOP_SOURCEDIR"=\"$(top_srcdir)\""
 FAPI_TESTS_INTEGRATION = \
     test/integration/dlopen-fapi-get-random.fint \
     test/integration/fapi-check-wrong-paths.fint \
@@ -321,6 +322,8 @@ FAPI_TESTS_INTEGRATION = \
     test/integration/fapi-get-random.fint \
     test/integration/fapi-platform-certificates.fint \
     test/integration/fapi-key-create-sign.fint \
+    test/integration/fapi-key-create-he-sign.fint \
+    test/integration/fapi-key-create-primary-sign.fint \
     test/integration/fapi-key-create2-sign.fint \
     test/integration/fapi-key-create-null-key-sign.fint \
     test/integration/fapi-key-create-sign-persistent-key.fint \
@@ -359,6 +362,7 @@ FAPI_TESTS_INTEGRATION = \
     test/integration/fapi-nv-set-bits.fint \
     test/integration/fapi-pcr-test.fint \
     test/integration/fapi-quote.fint \
+    test/integration/fapi-quote-with-primary.fint \
     test/integration/fapi-quote-rsa.fint \
     test/integration/fapi-policy-or-nv-read-write.fint \
     test/integration/fapi-second-provisioning.fint \
@@ -447,7 +451,8 @@ if ENABLE_TCTI_PCAP
 test_unit_tcti_pcap_CFLAGS  = $(CMOCKA_CFLAGS) $(TESTS_CFLAGS)
 test_unit_tcti_pcap_LDADD   = $(CMOCKA_LIBS) $(libtss2_mu) $(libutil)
 test_unit_tcti_pcap_LDFLAGS = -Wl,--wrap=getenv -Wl,--wrap=rand -Wl,--wrap=clock_gettime \
-        -Wl,--wrap=open -Wl,--wrap=read -Wl,--wrap=write -Wl,--wrap=close
+        -Wl,--wrap=open -Wl,--wrap=read -Wl,--wrap=write -Wl,--wrap=close \
+        -Wl,--wrap=__clock_gettime64
 test_unit_tcti_pcap_SOURCES = test/unit/tcti-pcap.c \
     src/tss2-tcti/tcti-common.c \
     src/tss2-tcti/tcti-pcap.c src/tss2-tcti/tcti-pcap.h \
@@ -474,7 +479,7 @@ test_unit_tctildr_dl_CFLAGS = $(CMOCKA_CFLAGS) $(TESTS_CFLAGS) \
         -UESYS_TCTI_DEFAULT_MODULE -UESYS_TCTI_DEFAUT_CONFIG
 test_unit_tctildr_dl_LDADD = $(CMOCKA_LIBS) $(TESTS_LDADD) $(LIBADD_DL)
 test_unit_tctildr_dl_LDFLAGS = -Wl,--wrap=dlopen,--wrap=dlclose,--wrap=dlsym \
-    -Wl,--wrap=tcti_from_init,--wrap=tcti_from_info
+    -Wl,--wrap=tcti_from_init,--wrap=tcti_from_info,--wrap=__dlsym_time64
 test_unit_tctildr_dl_SOURCES = test/unit/tctildr-dl.c \
         src/tss2-tcti/tctildr-dl.c
 
@@ -659,14 +664,19 @@ if FAPI
 
 test_unit_fapi_json_CFLAGS = $(CMOCKA_CFLAGS) $(TESTS_CFLAGS)
 test_unit_fapi_json_LDADD = $(CMOCKA_LIBS)  $(TESTS_LDADD)
-test_unit_fapi_json_LDFLAGS = $(TESTS_LDFLAGS) -ljson-c
+test_unit_fapi_json_LDFLAGS = $(TESTS_LDFLAGS)  $(CURL_LIBS) $(JSONC_LIBS)
 test_unit_fapi_json_SOURCES = test/unit/fapi-json.c \
                               src/tss2-fapi/ifapi_json_deserialize.c \
                               src/tss2-fapi/ifapi_json_serialize.c \
                               src/tss2-fapi/ifapi_policy_json_deserialize.c \
                               src/tss2-fapi/ifapi_policy_json_serialize.c \
                               src/tss2-fapi/tpm_json_deserialize.c \
-                              src/tss2-fapi/tpm_json_serialize.c
+                              src/tss2-fapi/tpm_json_serialize.c \
+                              src/tss2-fapi/ifapi_helpers.c \
+                              src/tss2-fapi/fapi_crypto.c \
+                              src/tss2-fapi/ifapi_eventlog.c \
+                              src/tss2-fapi/ifapi_keystore.c  \
+                              src/tss2-fapi/ifapi_io.c
 
 test_unit_fapi_helpers_CFLAGS = $(CMOCKA_CFLAGS) $(TESTS_CFLAGS)
 test_unit_fapi_helpers_LDADD = $(CMOCKA_LIBS)  $(TESTS_LDADD)
@@ -768,6 +778,16 @@ test_unit_fapi_get_intl_cert_SOURCES = test/unit/fapi-get-intl-cert.c \
                                        src/tss2-fapi/ifapi_io.c
 
 endif # FAPI
+
+if POLICY
+TESTS_UNIT += test/unit/tss2_policy
+
+test_unit_tss2_policy_CFLAGS  = $(CMOCKA_CFLAGS) $(TESTS_CFLAGS)
+test_unit_tss2_policy_LDADD   = $(CMOCKA_LIBS) $(libtss2_policy) $(libtss2_esys)
+test_unit_tss2_policy_SOURCES = test/unit/tss2_policy.c src/util/log.c \
+    test/data/test-fapi-policies.h
+endif # POLICY
+
 endif # UNIT
 
 if ENABLE_INTEGRATION
@@ -1188,6 +1208,13 @@ test_integration_esys_get_capability_int_LDADD   = $(TESTS_LDADD)
 test_integration_esys_get_capability_int_LDFLAGS = $(TESTS_LDFLAGS)
 test_integration_esys_get_capability_int_SOURCES = \
     test/integration/esys-get-capability.int.c \
+    test/integration/main-esys.c test/integration/test-esys.h
+
+test_integration_esys_get_capability_act_int_CFLAGS  = $(TESTS_CFLAGS)
+test_integration_esys_get_capability_act_int_LDADD   = $(TESTS_LDADD)
+test_integration_esys_get_capability_act_int_LDFLAGS = $(TESTS_LDFLAGS)
+test_integration_esys_get_capability_act_int_SOURCES = \
+    test/integration/esys-get-capability-act.int.c \
     test/integration/main-esys.c test/integration/test-esys.h
 
 test_integration_esys_get_random_int_CFLAGS  = $(TESTS_CFLAGS)
@@ -1695,6 +1722,21 @@ test_integration_fapi_key_create_sign_fint_SOURCES = \
     test/integration/fapi-key-create-sign.int.c \
     test/integration/main-fapi.c test/integration/test-fapi.h
 
+test_integration_fapi_key_create_he_sign_fint_CFLAGS  = $(TESTS_CFLAGS)
+test_integration_fapi_key_create_he_sign_fint_LDADD   = $(TESTS_LDADD)
+test_integration_fapi_key_create_he_sign_fint_LDFLAGS = $(TESTS_LDFLAGS)
+test_integration_fapi_key_create_he_sign_fint_SOURCES = \
+    test/integration/fapi-key-create-he-sign.int.c \
+    test/integration/main-fapi.c test/integration/test-fapi.h
+
+test_integration_fapi_key_create_primary_sign_fint_CFLAGS  = $(TESTS_CFLAGS)
+test_integration_fapi_key_create_primary_sign_fint_LDADD   = $(TESTS_LDADD)
+test_integration_fapi_key_create_primary_sign_fint_LDFLAGS = $(TESTS_LDFLAGS)
+test_integration_fapi_key_create_primary_sign_fint_SOURCES = \
+    test/integration/fapi-key-create-primary-sign.int.c \
+    test/integration/main-fapi.c test/integration/test-fapi.h
+
+
 test_integration_fapi_key_create2_sign_fint_CFLAGS  = $(TESTS_CFLAGS)
 test_integration_fapi_key_create2_sign_fint_LDADD   = $(TESTS_LDADD)
 test_integration_fapi_key_create2_sign_fint_LDFLAGS = $(TESTS_LDFLAGS)
@@ -2043,6 +2085,13 @@ test_integration_fapi_quote_fint_SOURCES = \
     test/integration/fapi-quote.int.c \
     test/integration/main-fapi.c test/integration/test-fapi.h
 
+test_integration_fapi_quote_with_primary_fint_CFLAGS  = $(TESTS_CFLAGS)
+test_integration_fapi_quote_with_primary_fint_LDADD    = $(TESTS_LDADD)
+test_integration_fapi_quote_with_primary_fint_LDFLAGS = $(TESTS_LDFLAGS)
+test_integration_fapi_quote_with_primary_fint_SOURCES = \
+    test/integration/fapi-quote-with-primary.int.c \
+    test/integration/main-fapi.c test/integration/test-fapi.h
+
 test_integration_fapi_quote_rsa_fint_CFLAGS  = $(TESTS_CFLAGS) \
  -DFAPI_PROFILE=\"P_RSA\"
 test_integration_fapi_quote_rsa_fint_LDADD   = $(TESTS_LDADD)
@@ -2137,6 +2186,23 @@ test_integration_fapi_quote_destructive_fint_SOURCES = \
 
 
 endif #FAPI
+
+# Need policy and esys enabled to run this test
+if POLICY
+if ESYS
+
+TESTS_INTEGRATION += test/integration/policy-execute.int
+
+test_integration_policy_execute_int_CFLAGS  = $(TESTS_CFLAGS)
+test_integration_policy_execute_int_LDADD   = $(TESTS_LDADD)
+test_integration_policy_execute_int_LDFLAGS   = $(TESTS_LDFLAGS)
+test_integration_policy_execute_int_SOURCES = \
+    test/integration/policy-execute.int.c \
+    test/integration/main-esys.c src/util/log.c \
+    test/integration/test-esys.h test/data/test-fapi-policies.h
+endif # ESYS
+endif # POLICY
+
 endif #ENABLE_INTEGRATION
 
 check-device:

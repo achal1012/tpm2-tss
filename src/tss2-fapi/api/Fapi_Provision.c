@@ -21,6 +21,7 @@
 #include "fapi_int.h"
 #include "fapi_crypto.h"
 #include "fapi_policy.h"
+#include "ifapi_curl.h"
 #include "ifapi_get_intl_cert.h"
 #include "ifapi_helpers.h"
 
@@ -398,32 +399,32 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
             /* Use the first appropriate hierarchy for provisioning. The first found
                hierarchy will be copied into the provisioning context.*/
             if (strcmp(path, "/HS") == 0) {
-                command->hierarchies[command->path_idx].handle = ESYS_TR_RH_OWNER;
-                if (!hierarchy_hs->handle) {
+                command->hierarchies[command->path_idx].public.handle = ESYS_TR_RH_OWNER;
+                if (!hierarchy_hs->public.handle) {
                     r = ifapi_copy_ifapi_hierarchy_object(hierarchy_hs,
                                                           &command->
                                                           hierarchies[command->path_idx]);
                     goto_if_error(r, "Copy hierarchy", error_cleanup);
                 }
             } else if (strcmp(path, "/HE") == 0) {
-                command->hierarchies[command->path_idx].handle = ESYS_TR_RH_ENDORSEMENT;
-                if (!hierarchy_he->handle) {
+                command->hierarchies[command->path_idx].public.handle = ESYS_TR_RH_ENDORSEMENT;
+                if (!hierarchy_he->public.handle) {
                     r = ifapi_copy_ifapi_hierarchy_object(hierarchy_he,
                                                           &command->
                                                           hierarchies[command->path_idx]);
                     goto_if_error(r, "Copy hierarchy", error_cleanup);
                 }
             } else if (strcmp(path, "/HN") == 0) {
-                command->hierarchies[command->path_idx].handle = ESYS_TR_RH_NULL;
-                if (!hierarchy_hn->handle) {
+                command->hierarchies[command->path_idx].public.handle = ESYS_TR_RH_NULL;
+                if (!hierarchy_hn->public.handle) {
                     r = ifapi_copy_ifapi_hierarchy_object(hierarchy_hn,
                                                           &command->
                                                           hierarchies[command->path_idx]);
                     goto_if_error(r, "Copy hierarchy", error_cleanup);
                 }
             } else if (strcmp(path, "/LOCKOUT") == 0) {
-                command->hierarchies[command->path_idx].handle = ESYS_TR_RH_LOCKOUT;
-                if (!hierarchy_lockout->handle) {
+                command->hierarchies[command->path_idx].public.handle = ESYS_TR_RH_LOCKOUT;
+                if (!hierarchy_lockout->public.handle) {
                     r = ifapi_copy_ifapi_hierarchy_object(hierarchy_lockout,
                                                           &command->
                                                           hierarchies[command->path_idx]);
@@ -586,8 +587,8 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
                 pkey->persistent_handle = command->public_templ.persistent_handle;
 
                 /* Prepare making the EK permanent. */
-                r = Esys_EvictControl_Async(context->esys, hierarchy_hs->handle,
-                        pkeyObject->handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
+                r = Esys_EvictControl_Async(context->esys, hierarchy_hs->public.handle,
+                        pkeyObject->public.handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
                         ESYS_TR_NONE, pkey->persistent_handle);
                 goto_if_error(r, "Error Esys EvictControl", error_cleanup);
                 context->state = PROVISION_WAIT_FOR_EK_PERSISTENT;
@@ -824,7 +825,7 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
 
         statecase(context->state, PROVISION_EK_CHECK_CERT);
             /* The EK certificate will be verified against the FAPI list of root certificates. */
-            r = ifapi_verify_ek_cert(command->root_crt, command->intermed_crt, command->pem_cert);
+            r = ifapi_curl_verify_ek_cert(command->root_crt, command->intermed_crt, command->pem_cert);
             SAFE_FREE(command->root_crt);
             SAFE_FREE(command->intermed_crt);
             goto_if_error2(r, "Verify EK certificate", error_cleanup);
@@ -1013,8 +1014,8 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
                 pkey->persistent_handle = command->public_templ.persistent_handle;
 
                 /* Prepare making the SRK permanent. */
-                r = Esys_EvictControl_Async(context->esys, hierarchy_hs->handle,
-                    pkeyObject->handle, ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                r = Esys_EvictControl_Async(context->esys, hierarchy_hs->public.handle,
+                    pkeyObject->public.handle, ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
                     pkey->persistent_handle);
                 goto_if_error(r, "Error Esys EvictControl", error_cleanup);
 
@@ -1111,18 +1112,18 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
             return TSS2_FAPI_RC_TRY_AGAIN;
 
         statecase(context->state, PROVISION_WAIT_FOR_SRK_PERSISTENT);
-            r = Esys_EvictControl_Finish(context->esys, &pkeyObject->handle);
+            r = Esys_EvictControl_Finish(context->esys, &pkeyObject->public.handle);
             return_try_again(r);
             goto_if_error(r, "Evict control failed", error_cleanup);
 
             /* The SRK was made persistent and can be written to key store. */
             command->srk_tpm_handle = pkeyObject->misc.key.persistent_handle;
-            command->srk_esys_handle = pkeyObject->handle;
+            command->srk_esys_handle = pkeyObject->public.handle;
             context->state = PROVISION_SRK_WRITE_PREPARE;
             return TSS2_FAPI_RC_TRY_AGAIN;
 
         statecase(context->state, PROVISION_WAIT_FOR_EK_PERSISTENT);
-            r = Esys_EvictControl_Finish(context->esys, &pkeyObject->handle);
+            r = Esys_EvictControl_Finish(context->esys, &pkeyObject->public.handle);
             return_try_again(r);
 
             /* Retry with authorization callback after trial with null auth */
@@ -1143,7 +1144,7 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
             goto_if_error(r, "Evict control failed", error_cleanup);
 
             command->ek_tpm_handle = pkeyObject->misc.key.persistent_handle;
-            command->ek_esys_handle = pkeyObject->handle;
+            command->ek_esys_handle = pkeyObject->public.handle;
 
             context->state = PROVISION_INIT_GET_CAP2;
             return TSS2_FAPI_RC_TRY_AGAIN;
@@ -1407,17 +1408,17 @@ Fapi_Provision_Finish(FAPI_CONTEXT *context)
                exist in the keystore. If all files are written the provisioning
                is continued at the appropriate next state. */
             if (command->path_idx == command->numHierarchyObjects) {
-                if (command->hierarchy->handle == ESYS_TR_RH_OWNER)
+                if (command->hierarchy->public.handle == ESYS_TR_RH_OWNER)
                     context->state = PROVISION_PREPARE_NULL;
-                if (command->hierarchy->handle == ESYS_TR_RH_NULL)
+                if (command->hierarchy->public.handle == ESYS_TR_RH_NULL)
                     context->state = PROVISION_FINISHED;
-                else if (command->hierarchy->handle == ESYS_TR_RH_ENDORSEMENT)
+                else if (command->hierarchy->public.handle == ESYS_TR_RH_ENDORSEMENT)
                     context->state = PROVISION_CHANGE_SH_CHECK;
-                else if (command->hierarchy->handle == ESYS_TR_RH_LOCKOUT)
+                else if (command->hierarchy->public.handle == ESYS_TR_RH_LOCKOUT)
                     context->state = PROVISION_CHANGE_EH_CHECK;
                 return TSS2_FAPI_RC_TRY_AGAIN;
             }
-            if (command->hierarchies[command->path_idx].handle == command->hierarchy->handle) {
+            if (command->hierarchies[command->path_idx].public.handle == command->hierarchy->public.handle) {
                 r = ifapi_keystore_store_async(&context->keystore, &context->io,
                                                command->pathlist[command->path_idx],
                                                command->hierarchy);

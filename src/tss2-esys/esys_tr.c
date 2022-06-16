@@ -65,15 +65,14 @@ Esys_TR_Serialize(ESYS_CONTEXT * esys_context,
  *
  * Deserialize the metadata of an ESYS_TR object from a byte buffer that was
  * stored on disk for later use by a different program or context.
- * An object can be serialized suing Esys_TR_Serialize.
+ * An object can be deserialized using Esys_TR_Deserialize.
  * @param esys_context [in,out] The ESYS_CONTEXT.
- * @param esys_handle [in] The ESYS_TR object to serialize.
- * @param buffer [out] The buffer containing the serialized metadata.
- *        (caller-callocated) Shall be freed using free().
- * @param buffer_size [out] The size of the buffer parameter.
+ * @param esys_handle [out] The ESYS_TR object to deserialize.
+ * @param buffer [in] The buffer containing the metadata of the ESYS_TR object.
+ * @param buffer_size [in] The size of the buffer parameter.
  * @retval TSS2_RC_SUCCESS on Success.
  * @retval TSS2_ESYS_RC_MEMORY if the object can not be allocated.
- * @retval TSS2_ESYS_RC_INSUFFICIENT_BUFFER if the buffer for unmarshaling.
+ * @retval TSS2_ESYS_RC_INSUFFICIENT_BUFFER if the buffer for unmarshalling.
  * @retval TSS2_ESYS_RC_BAD_REFERENCE if the esysContext is NULL.
  * @retval TSS2_RCs produced by lower layers of the software stack.
  */
@@ -373,7 +372,7 @@ Esys_TR_Close(ESYS_CONTEXT * esys_context, ESYS_TR * object)
  * @retval TSS2_RC_SUCCESS on Success.
  * @retval TSS2_ESYS_RC_BAD_REFERENCE if the esysContext is NULL.
  * @retval TSS2_ESYS_RC_BAD_TR if the ESYS_TR object is unknown to the
- *         ESYS_CONTEXT.
+ *         ESYS_CONTEXT or it equals ESYS_TR_NONE.
  */
 TSS2_RC
 Esys_TR_SetAuth(ESYS_CONTEXT * esys_context, ESYS_TR esys_handle,
@@ -384,6 +383,9 @@ Esys_TR_SetAuth(ESYS_CONTEXT * esys_context, ESYS_TR esys_handle,
     TPMI_ALG_HASH name_alg = TPM2_ALG_NULL;
 
     _ESYS_ASSERT_NON_NULL(esys_context);
+    if (esys_handle == ESYS_TR_NONE) {
+      return_error(TSS2_ESYS_RC_BAD_TR, "esys_handle can't be ESYS_TR_NONE.");
+    }
     r = esys_GetResourceObject(esys_context, esys_handle, &esys_object);
     if (r != TPM2_RC_SUCCESS)
         return r;
@@ -421,6 +423,7 @@ Esys_TR_SetAuth(ESYS_CONTEXT * esys_context, ESYS_TR esys_handle,
  * @retval TSS2_ESYS_RC_MEMORY if needed memory can't be allocated.
  * @retval TSS2_ESYS_RC_GENERAL_FAILURE for errors of the crypto library.
  * @retval TSS2_ESYS_RC_BAD_REFERENCE if the esysContext is NULL.
+ * @retval TSS2_ESYS_RC_BAD_TR if the handle is invalid.
  * @retval TSS2_SYS_RC_* for SAPI errors.
  */
 TSS2_RC
@@ -430,6 +433,10 @@ Esys_TR_GetName(ESYS_CONTEXT * esys_context, ESYS_TR esys_handle,
     RSRC_NODE_T *esys_object;
     TSS2_RC r;
     _ESYS_ASSERT_NON_NULL(esys_context);
+
+    if (esys_handle == ESYS_TR_NONE) {
+        return_error(TSS2_ESYS_RC_BAD_TR, "Name for ESYS_TR_NONE can't be determined.");
+    }
 
     r = esys_GetResourceObject(esys_context, esys_handle, &esys_object);
     return_if_error(r, "Object not found");

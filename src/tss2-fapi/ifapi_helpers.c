@@ -18,7 +18,6 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <dirent.h>
-#include <curl/curl.h>
 
 #include "tss2_mu.h"
 #include "fapi_util.h"
@@ -922,12 +921,51 @@ append_object_to_list(void *object, NODE_OBJECT_T **object_list)
     return TSS2_RC_SUCCESS;
 }
 
+/**  Compute the name of a hierarchy object.
+ *
+ * The TPM handle will be computed from the esys handle and the name
+ * will be computed from the TPM handle.
+ *
+ * @param[in,out] hierarchy The hierarchy object.
+ */
+static void
+set_name_hierarchy_object(IFAPI_OBJECT *object)
+{
+    TPM2_HANDLE handle = 0;
+    size_t offset = 0;
+    switch (object->public.handle) {
+    case ESYS_TR_RH_NULL:
+        handle = TPM2_RH_NULL;
+        break;
+    case ESYS_TR_RH_OWNER:
+        handle = TPM2_RH_OWNER;
+        break;
+    case ESYS_TR_RH_ENDORSEMENT:
+        handle = TPM2_RH_ENDORSEMENT;
+        break;
+    case ESYS_TR_RH_LOCKOUT:
+        handle = TPM2_RH_LOCKOUT;
+        break;
+    case ESYS_TR_RH_PLATFORM:
+        handle = TPM2_RH_PLATFORM;
+        break;
+    case ESYS_TR_RH_PLATFORM_NV:
+        handle = TPM2_RH_PLATFORM_NV;
+        break;
+    }
+    Tss2_MU_TPM2_HANDLE_Marshal(handle,
+                                &object->misc.hierarchy.name.name[0], sizeof(TPM2_HANDLE),
+                                &offset);
+    object->misc.hierarchy.name.size = offset;
+}
+
 /** Initialize the internal representation of a FAPI hierarchy object.
  *
  * The object will be cleared and the type of the general fapi object will be
  * set to hierarchy.
  *
- * @param[out] hierarchy The caller allocated hierarchy object.
+ * @param[in,out] hierarchy The caller allocated hierarchy object. The name of the
+ *                object will be computed.
  * @param[in] esys_handle The ESAPI handle of the hierarchy which will be added to
  *            to the object.
  */
@@ -939,7 +977,55 @@ ifapi_init_hierarchy_object(
     memset(hierarchy, 0, sizeof(IFAPI_OBJECT));
     hierarchy->system = TPM2_YES;
     hierarchy->objectType = IFAPI_HIERARCHY_OBJ;
-    hierarchy->handle = esys_handle;
+    hierarchy->public.handle = esys_handle;
+    hierarchy->misc.hierarchy.esysHandle = esys_handle;
+    set_name_hierarchy_object(hierarchy);
+}
+
+/**  Initialize a hierarchy object read from a file.
+ *
+ * The esys handles will be set depending on the object path and the
+ * object name will be computed.
+ *
+ * @param[in,out] hierarchy The caller allocated hierarchy object.
+ * @retval TSS2_RC_SUCCESS if the hierarchy could be initialized.
+ * @retval TSS2_FAPI_RC_GENERAL_FAILURE For an invalid hierarchy path.
+ */
+TSS2_RC
+ifapi_set_name_hierarchy_object(IFAPI_OBJECT *object)
+{
+    const char *path = object->rel_path;
+    size_t pos = 0, pos2;
+    if (path) {
+        /* Determine esys handle from pathname. */
+        if (strncmp("/", &path[0], 1) == 0)
+            pos += 1;
+        /* Skip profile if it does exist in path */
+        if (strncmp("P_", &path[pos], 2) == 0) {
+            char *  start = strchr(&path[pos], IFAPI_FILE_DELIM_CHAR);
+            if (start) {
+                pos2 = (int)(start - &path[pos]);
+                pos = pos2 + 2;
+            } else {
+                return_error(TSS2_FAPI_RC_GENERAL_FAILURE, "Invalid path.");
+            }
+        }
+        if (strcmp(&path[pos], "HS") == 0) {
+            object->public.handle = ESYS_TR_RH_OWNER;
+            object->misc.hierarchy.esysHandle = ESYS_TR_RH_OWNER;
+        } else if (strcmp(&path[pos], "HE") == 0) {
+            object->public.handle = ESYS_TR_RH_ENDORSEMENT;
+            object->misc.hierarchy.esysHandle = ESYS_TR_RH_ENDORSEMENT;
+        } else if (strcmp(&path[pos], "LOCKOUT") == 0) {
+            object->public.handle = ESYS_TR_RH_LOCKOUT;
+            object->misc.hierarchy.esysHandle = ESYS_TR_RH_LOCKOUT;
+        } else  if (strcmp(&path[pos], "HN") == 0) {
+            object->public.handle = ESYS_TR_RH_NULL;
+            object->misc.hierarchy.esysHandle = ESYS_TR_RH_NULL;
+        }
+    }
+    set_name_hierarchy_object(object);
+    return TSS2_RC_SUCCESS;
 }
 
 /** Create a directory and all sub directories.
@@ -1516,6 +1602,9 @@ ifapi_object_cmp_name(IFAPI_OBJECT *object, void *name, bool *equal)
     TPM2B_NAME nv_name;
 
     switch (object->objectType) {
+    case IFAPI_HIERARCHY_OBJ:
+        obj_name = &object->misc.hierarchy.name;
+        break;
     case IFAPI_KEY_OBJ:
         obj_name = &object->misc.key.name;
         break;
@@ -2016,6 +2105,9 @@ ifapi_calculate_pcr_digest(
     case TPM2_ALG_ECDSA:
         pcr_digest_hash_alg = quote_info->sig_scheme.details.ecdsa.hashAlg;
         break;
+    case TPM2_ALG_SM2:
+        pcr_digest_hash_alg = quote_info->sig_scheme.details.sm2.hashAlg;
+        break;
     default:
         LOG_ERROR("Unknown sig scheme");
         return TSS2_FAPI_RC_BAD_VALUE;
@@ -2364,123 +2456,6 @@ ifapi_cmp_public_key(
     }
 }
 
-struct CurlBufferStruct {
-  unsigned char *buffer;
-  size_t size;
-};
-
-/** Callback for copying received curl data to a buffer.
- *
- * The buffer will be reallocated according to the size of retrieved data.
- *
- * @param[in]  contents The retrieved content.
- * @param[in]  size the block size in the content.
- * @param[in]  nmemb The number of blocks.
- * @retval realsize The byte size of the data.
- */
-static size_t
-write_curl_buffer_cb(void *contents, size_t size, size_t nmemb, void *userp)
-{
-    size_t realsize = size * nmemb;
-    struct CurlBufferStruct *curl_buf = (struct CurlBufferStruct *)userp;
-
-    unsigned char *tmp_ptr = realloc(curl_buf->buffer, curl_buf->size + realsize + 1);
-    if (tmp_ptr == NULL) {
-        LOG_ERROR("Can't allocate memory in CURL callback.");
-        return 0;
-    }
-    curl_buf->buffer = tmp_ptr;
-    memcpy(&(curl_buf->buffer[curl_buf->size]), contents, realsize);
-    curl_buf->size += realsize;
-    curl_buf->buffer[curl_buf->size] = 0;
-
-    return realsize;
-}
-
-/** Get byte buffer from file system or web via curl.
- *
- * @param[in]  url The url of the resource.
- * @param[out] buffer The buffer retrieved via the url.
- * @param[out] buffer_size The size of the retrieved object.
- *
- * @retval 0 if buffer could be retrieved.
- * @retval -1 if an error did occur
- */
-int
-ifapi_get_curl_buffer(unsigned char * url, unsigned char ** buffer,
-                          size_t *buffer_size) {
-    int ret = -1;
-    struct CurlBufferStruct curl_buffer = { .size = 0, .buffer = NULL };
-
-    CURLcode rc = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (rc != CURLE_OK) {
-        LOG_ERROR("curl_global_init failed: %s", curl_easy_strerror(rc));
-        goto out_memory;
-    }
-
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        LOG_ERROR("curl_easy_init failed");
-        goto out_global_cleanup;
-    }
-
-    rc = curl_easy_setopt(curl, CURLOPT_URL, url);
-    if (rc != CURLE_OK) {
-        LOG_ERROR("curl_easy_setopt for CURLOPT_URL failed: %s",
-                curl_easy_strerror(rc));
-        goto out_easy_cleanup;
-    }
-
-    rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
-                          write_curl_buffer_cb);
-    if (rc != CURLE_OK) {
-        LOG_ERROR("curl_easy_setopt for CURLOPT_URL failed: %s",
-                curl_easy_strerror(rc));
-        goto out_easy_cleanup;
-    }
-
-    rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA,
-                          (void *)&curl_buffer);
-    if (rc != CURLE_OK) {
-        LOG_ERROR("curl_easy_setopt for CURLOPT_URL failed: %s",
-                curl_easy_strerror(rc));
-        goto out_easy_cleanup;
-    }
-
-    rc = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-    if (rc != CURLE_OK) {
-        LOG_ERROR("curl_easy_setopt for CURLOPT_FOLLOWLOCATION failed: %s",
-                  curl_easy_strerror(rc));
-        goto out_easy_cleanup;
-    }
-
-    if (LOGMODULE_status == LOGLEVEL_TRACE) {
-        if (CURLE_OK != curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L)) {
-            LOG_WARNING("Curl easy setopt verbose failed");
-        }
-    }
-
-    rc = curl_easy_perform(curl);
-    if (rc != CURLE_OK) {
-        LOG_ERROR("curl_easy_perform() failed: %s", curl_easy_strerror(rc));
-        goto out_easy_cleanup;
-    }
-
-    *buffer = curl_buffer.buffer;
-    *buffer_size = curl_buffer.size;
-
-    ret = 0;
-
-out_easy_cleanup:
-    if (ret != 0)
-        free(curl_buffer.buffer);
-    curl_easy_cleanup(curl);
-out_global_cleanup:
-    curl_global_cleanup();
-out_memory:
-    return ret;
-}
-
 /** Check valid keys of a json object.
  *
  * @param[in]  jso The json object.
@@ -2515,5 +2490,62 @@ ifapi_check_json_object_fields(
                 LOG_WARNING("Invalid field: %s", key);
             }
         }
+    }
+}
+
+TSS2_RC ifapi_pcr_selection_to_pcrvalues(
+        TPML_PCR_SELECTION *pcr_selection,
+        TPML_DIGEST *pcr_digests,
+        TPML_PCRVALUES **out) {
+
+    /* Count pcrs */
+    UINT32 i = 0, pcr = 0, n_pcrs = 0, i_pcr = 0;
+    for (i = 0; i < pcr_selection->count; i++) {
+        for (pcr = 0; pcr < TPM2_MAX_PCRS; pcr++) {
+            uint8_t byte_idx = pcr / 8;
+            uint8_t flag = 1 << (pcr % 8);
+            /* Check whether PCR is used. */
+            if (flag & pcr_selection->pcrSelections[i].pcrSelect[byte_idx])
+                n_pcrs += 1;
+        }
+    }
+
+
+    TPML_PCRVALUES *pcr_values = calloc(1, sizeof(TPML_PCRVALUES) + n_pcrs* sizeof(TPMS_PCRVALUE));
+    return_if_null(pcr_values, "Out of memory.", TSS2_FAPI_RC_MEMORY);
+    /* Initialize digest list with pcr values from TPM */
+    i_pcr = 0;
+    pcr_values->count = pcr_digests->count;
+    for (i = 0; i < pcr_selection->count; i++) {
+        for (pcr = 0; pcr < TPM2_MAX_PCRS; pcr++) {
+            uint8_t byte_idx = pcr / 8;
+            uint8_t flag = 1 << (pcr % 8);
+            /* Check whether PCR is used. */
+            if (flag & pcr_selection->pcrSelections[i].pcrSelect[byte_idx]) {
+                pcr_values->pcrs[i_pcr].pcr = pcr;
+                pcr_values->pcrs[i_pcr].hashAlg = pcr_selection->pcrSelections[i].hash;
+                memcpy(&pcr_values->pcrs[i_pcr].digest,
+                       &pcr_digests->digests[i_pcr].buffer[0],
+                       pcr_digests->digests[i_pcr].size);
+                i_pcr += 1;
+            }
+        }
+    }
+
+    *out = pcr_values;
+
+    return TSS2_RC_SUCCESS;
+}
+
+void ifapi_helper_init_policy_pcr_selections (TSS2_POLICY_PCR_SELECTION *s,
+        TPMT_POLICYELEMENT *pol_element)
+{
+    if (pol_element->element.PolicyPCR.currentPCRs.sizeofSelect > 0) {
+        s->type = TSS2_POLICY_PCR_SELECTOR_PCR_SELECT;
+        s->selections.pcr_select = pol_element->element.PolicyPCR.currentPCRs;
+    } else {
+        s->type = TSS2_POLICY_PCR_SELECTOR_PCR_SELECTION;
+        s->selections.pcr_selection =
+                pol_element->element.PolicyPCR.currentPCRandBanks;
     }
 }

@@ -4,7 +4,7 @@
 # All rights reserved.
 
 AC_INIT([tpm2-tss],
-        [m4_esyscmd_s([git describe --tags --always --dirty])],
+        [m4_esyscmd_s([cat ./VERSION])],
         [https://github.com/tpm2-software/tpm2-tss/issues],
         [],
         [https://github.com/tpm2-software/tpm2-tss])
@@ -15,7 +15,7 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])]) #Backward compatible setti
 
 AC_CONFIG_HEADERS([config.h])
 
-AC_CONFIG_FILES([Makefile Doxyfile lib/tss2-sys.pc lib/tss2-esys.pc lib/tss2-mu.pc lib/tss2-tcti-device.pc lib/tss2-tcti-mssim.pc lib/tss2-tcti-swtpm.pc lib/tss2-tcti-libtpms.pc lib/tss2-tcti-pcap.pc lib/tss2-rc.pc lib/tss2-tctildr.pc lib/tss2-fapi.pc lib/tss2-tcti-cmd.pc])
+AC_CONFIG_FILES([Makefile Doxyfile lib/tss2-sys.pc lib/tss2-esys.pc lib/tss2-mu.pc lib/tss2-tcti-device.pc lib/tss2-tcti-mssim.pc lib/tss2-tcti-swtpm.pc lib/tss2-tcti-pcap.pc lib/tss2-tcti-libtpms.pc lib/tss2-rc.pc lib/tss2-tctildr.pc lib/tss2-fapi.pc lib/tss2-tcti-cmd.pc lib/tss2-policy.pc])
 
 # propagate configure arguments to distcheck
 AC_SUBST([DISTCHECK_CONFIGURE_FLAGS],[$ac_configure_args])
@@ -124,6 +124,14 @@ AS_IF([test "x$enable_fapi_async_tests" = "xyes"],
 AS_IF([test "x$enable_fapi_async_tests" = "xyes"],
     [AC_MSG_WARN("FAPI compiled with asynchronous spinning testing. NOT FOR PRODUCTION!")])
 
+AC_ARG_ENABLE([policy],
+            [AS_HELP_STRING([--enable-policy],
+                            [build the tss2-policy library (default is yes)])],
+            [enable_policy=$enableval],
+            [enable_policy=yes])
+
+AM_CONDITIONAL(POLICY, test "x$enable_policy" = "xyes")
+
 AC_ARG_WITH([crypto],
             [AS_HELP_STRING([--with-crypto={ossl,mbed}],
                             [sets the ESYS crypto backend (default is OpenSSL)])],,
@@ -140,6 +148,9 @@ AS_IF([test "x$enable_esys" = xyes],
                              [libcrypto >= ossl_min_version],,
                              [AC_MSG_ERROR([ossl_err])])
            AC_DEFINE([OSSL], [1], [OpenSSL cryptographic backend])
+           AC_CHECK_LIB(crypto,[EVP_sm3], [
+               AC_DEFINE([HAVE_EVP_SM3], [1], [Support EVP_sm3 in openssl])],
+                [])
            TSS2_ESYS_CFLAGS_CRYPTO="$CRYPTO_CFLAGS"
            TSS2_ESYS_LDFLAGS_CRYPTO="$CRYPTO_LIBS"
        ], [test "x$with_crypto" = xmbed], [
@@ -151,13 +162,16 @@ AS_IF([test "x$enable_esys" = xyes],
 AC_SUBST([TSS2_ESYS_CFLAGS_CRYPTO])
 AC_SUBST([TSS2_ESYS_LDFLAGS_CRYPTO])
 
-AS_IF([test "x$enable_fapi" != xno -a "x$enable_esys" = "xno"],
+AS_IF([test "x$enable_fapi" != xno && test "x$enable_esys" = "xno"],
     [AC_MSG_ERROR([ESYS has to be enabled to compile FAPI.])])
 
-AS_IF([test "x$enable_fapi" != xno -a "x$with_crypto" != "xossl"],
+AS_IF([test "x$enable_fapi" != xno && test "x$with_crypto" != "xossl"],
     [AC_MSG_ERROR([FAPI has to be compiled with OpenSSL])])
 
-AS_IF([test "x$enable_fapi" = xyes ],
+AS_IF([test "x$enable_policy" != xno && test "x$with_crypto" != "xossl"],
+    [AC_MSG_ERROR([libpolicy has to be compiled with OpenSSL])])
+
+AS_IF([test "x$enable_fapi" = xyes -o "x$enable_policy" = xyes ],
       [PKG_CHECK_MODULES([JSONC], [json-c])])
 
 AS_IF([test "x$enable_fapi" = xyes ],
@@ -260,7 +274,7 @@ dnl ---------  Physical TPM device for testing -----------------------
 
 AC_ARG_WITH([device],
             [AS_HELP_STRING([--with-device=<device>],[TPM device for testing])],
-            [AS_IF([test \( -w "$with_device" \)  -a \( -r "$with_device" \)],
+            [AS_IF([test -w "$with_device" && test -r "$with_device"],
                    [AC_MSG_RESULT([success])
                     AX_NORMALIZE_PATH([with_device])
                     with_device_set=yes],
@@ -317,7 +331,7 @@ AS_IF([test "x$enable_integration" = "xyes"],
        ERROR_IF_NO_PROG([grep])
        ERROR_IF_NO_PROG([env])
        ERROR_IF_NO_PROG([rm])
-       AS_IF([test "x$with_crypto" != xossl -o "x$enable_esys" != xyes],
+       AS_IF([test "x$with_crypto" != xossl || test "x$enable_esys" != xyes],
            [PKG_CHECK_MODULES([CRYPTO],[libcrypto])])
        AC_CHECK_HEADER(uthash.h, [], [AC_MSG_ERROR([Can not find uthash.h. Please install uthash-dev])])
 
@@ -484,15 +498,17 @@ AC_CHECK_PROG(systemd_sysusers, systemd-sysusers, yes)
 AM_CONDITIONAL(SYSD_SYSUSERS, test "x$systemd_sysusers" = "xyes")
 AC_CHECK_PROG(systemd_tmpfiles, systemd-tmpfiles, yes)
 AM_CONDITIONAL(SYSD_TMPFILES, test "x$systemd_tmpfiles" = "xyes")
+
 # Check all tools used by make install
-AS_IF([test "$HOSTOS" = "Linux"],
-      [ERROR_IF_NO_PROG([groupadd])
-       ERROR_IF_NO_PROG([useradd])
-       ERROR_IF_NO_PROG([id])
-       ERROR_IF_NO_PROG([chown])
-       ERROR_IF_NO_PROG([chmod])
-       ERROR_IF_NO_PROG([mkdir])
-       ERROR_IF_NO_PROG([setfacl])])
+AS_IF([test "$HOSTOS" = "Linux" && test "x$systemd_sysusers" != "xyes"],
+    [ AC_CHECK_PROG(useradd, useradd, yes)
+      AC_CHECK_PROG(groupadd, groupadd, yes)
+      AC_CHECK_PROG(adduser, adduser, yes)
+      AC_CHECK_PROG(addgroup, addgroup, yes)
+      AS_IF([test "x$addgroup" != "xyes" && test "x$groupadd" != "xyes" ],
+         [AC_MSG_ERROR([addgroup or groupadd are needed.])])
+      AS_IF([test "x$adduser" != "xyes" && test "x$useradd" != "xyes" ],
+         [AC_MSG_ERROR([adduser or useradd are needed.])])])
 
 AC_SUBST([PATH])
 
@@ -544,6 +560,7 @@ AC_MSG_RESULT([
     $PACKAGE_NAME $VERSION
     esys:               $enable_esys
     fapi:               $enable_fapi
+    policy:             $enable_policy
     tctidefaultmodule:  $with_tctidefaultmodule
     tctidefaultconfig:  $with_tctidefaultconfig
     unit:               $enable_unit

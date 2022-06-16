@@ -67,8 +67,6 @@ error_cleanup:
  *
  * @param[in] context The context storing information for re-entry after try again.
  * @param[in] policy The policy to be instantiated.
- * @param[in] callbacks The needed callback functions with the corresponding user data
- *           which will be passed to the callback.
  * @retval TSS2_RC_SUCCESS on success.
  * @retval FAPI error codes on failure
  * @retval TSS2_FAPI_RC_MEMORY if not enough memory can be allocated.
@@ -76,13 +74,9 @@ error_cleanup:
 TSS2_RC
 ifapi_policyeval_instantiate_async(
     IFAPI_POLICY_EVAL_INST_CTX *context, /* For re-entry after try_again for offsets and such */
-    TPMS_POLICY *policy, /* in */
-    ifapi_policyeval_INST_CB *callbacks)
+    TPMS_POLICY *policy /* in */)
 {
     TSS2_RC r;
-
-    /* Store callbacks and their parameters in context */
-    context->callbacks = *callbacks;
 
     /* Compute list of all policy elements which have to be instantiated */
     if (context->policy_elements) {
@@ -159,6 +153,11 @@ set_pem_key_param(
          return_error2(TSS2_FAPI_RC_BAD_TEMPLATE, "No path for policy %s", template); \
      }
 
+#define CHECK_CALLBACK(callback, name) \
+    if (!callback) { \
+        return_error2(TSS2_FAPI_RC_BAD_VALUE, "Callback %s was NULL", name) \
+    }
+
 /** Finalize  instantiation a policy template.
  *
  * All needed asyncroous callbacks will be executed for all policy elements offset
@@ -223,6 +222,7 @@ ifapi_policyeval_instantiate_finish(
                 break;
             }
             CHECK_TEMPLATE_PATH(pol_element->element.PolicySigned.keyPath, "PolicySigned");
+            CHECK_CALLBACK(context->callbacks.cbpublic, "cbpublic");
 
             /* Public info will be added to policy. */
             r = context->callbacks.cbpublic(pol_element->element.PolicySigned.keyPath,
@@ -238,6 +238,10 @@ ifapi_policyeval_instantiate_finish(
         case POLICYNAMEHASH:
             /* Set index of last name to be computed. */
             i_last = pol_element->element.PolicyNameHash.count - 1;
+            if (pol_element->element.PolicyNameHash.objectNames[i_last].size) {
+                CHECK_CALLBACK(context->callbacks.cbname, "cbname");
+            }
+
             while (!pol_element->element.PolicyNameHash.objectNames[i_last].size) {
                 /* Not all object names have been computed or were initialized */
                 size_t i = pol_element->element.PolicyNameHash.i;
@@ -258,6 +262,7 @@ ifapi_policyeval_instantiate_finish(
                 break;
             }
             CHECK_TEMPLATE_PATH(pol_element->element.PolicySecret.objectPath, "PolicySecret");
+            CHECK_CALLBACK(context->callbacks.cbname, "cbname");
             /* Object name will be added to policy. */
             r = context->callbacks.cbname(pol_element->element.PolicySecret.objectPath,
                                           &pol_element->element.PolicySecret.objectName,
@@ -273,13 +278,25 @@ ifapi_policyeval_instantiate_finish(
                 /* PCR values already defined */
                 break;
             }
+
+            TSS2_POLICY_PCR_SELECTION s = { 0 };
+            ifapi_helper_init_policy_pcr_selections(&s, pol_element);
+
+            TPML_PCR_SELECTION out_pcrselect = { 0 };
+            TPML_DIGEST out_digests = { 0 };
+
+            CHECK_CALLBACK(context->callbacks.cbpcr, "cbpcr");
             /* Current values of PCRs will be used for policy */
-            r = context->callbacks.cbpcr(&pol_element->element.PolicyPCR.currentPCRs,
-                                         &pol_element->element.PolicyPCR.currentPCRandBanks,
-                                         &pol_element->element.PolicyPCR.pcrs,
+            r = context->callbacks.cbpcr(&s,
+                                         &out_pcrselect,
+                                         &out_digests,
                                          context->callbacks.cbpcr_userdata);
             return_try_again(r);
             return_if_error(r, "read_finish failed");
+
+            r = ifapi_pcr_selection_to_pcrvalues(&out_pcrselect, &out_digests,
+                    &pol_element->element.PolicyPCR.pcrs);
+            return_if_error(r, "ifapi_pcr_selection_to_pcrvalues failed");
 
             pol_element->element.PolicyPCR.currentPCRs.sizeofSelect = 0;
             pol_element->element.PolicyPCR.currentPCRandBanks.count = 0;
@@ -295,6 +312,7 @@ ifapi_policyeval_instantiate_finish(
             }
 
             CHECK_TEMPLATE_PATH(pol_element->element.PolicyNV.nvPath, "PolicyNv");
+            CHECK_CALLBACK(context->callbacks.cbnvpublic, "cbnvpublic");
             /* Object name will be added to policy. */
             r = context->callbacks.cbnvpublic(pol_element->element.PolicyNV.nvPath,
                                               &pol_element->element.PolicyNV.nvPublic,
@@ -318,7 +336,7 @@ ifapi_policyeval_instantiate_finish(
 
             CHECK_TEMPLATE_PATH(pol_element->element.PolicyDuplicationSelect.newParentPath,
                                 "PolicyDuplicationselect");
-
+            CHECK_CALLBACK(context->callbacks.cbpublic, "cbpublic");
             /* Public info will be added to policy. */
             r = context->callbacks.cbpublic(
                      pol_element->element.PolicyDuplicationSelect.newParentPath,
@@ -345,6 +363,7 @@ ifapi_policyeval_instantiate_finish(
 
             CHECK_TEMPLATE_PATH(pol_element->element.PolicyAuthorizeNv.nvPath,
                                 "PolicyAuthorizeNv");
+            CHECK_CALLBACK(context->callbacks.cbnvpublic, "cbnvpublic");
             /* Object name will be added to policy. */
             r = context->callbacks.cbnvpublic(pol_element->element.PolicyAuthorizeNv.nvPath,
                                               &pol_element->element.PolicyAuthorizeNv.nvPublic,
@@ -383,6 +402,7 @@ ifapi_policyeval_instantiate_finish(
             }
 
             CHECK_TEMPLATE_PATH(pol_element->element.PolicyAuthorize.keyPath, "PolicyAuthorize");
+            CHECK_CALLBACK(context->callbacks.cbpublic, "cbpublic");
 
             /* Object public data will be added to policy. */
             r = context->callbacks.cbpublic(pol_element->element.PolicyAuthorize.keyPath,

@@ -629,10 +629,10 @@ ifapi_keystore_load_finish(
     goto_if_null2(jso, "Keystore is corrupted (Json error).", r, TSS2_FAPI_RC_GENERAL_FAILURE,
                   error_cleanup);
 
+    object->rel_path = keystore->rel_path;
     r = ifapi_json_IFAPI_OBJECT_deserialize(jso, object);
     goto_if_error(r, "Deserialize object.", error_cleanup);
 
-    object->rel_path = keystore->rel_path;
     SAFE_FREE(buffer);
     if (jso)
         json_object_put(jso);
@@ -1140,6 +1140,9 @@ keystore_search_obj(
     IFAPI_OBJECT object;
     size_t i;
 
+    /* Mark object "unread" */
+    object.objectType = IFAPI_OBJ_NONE;
+
     switch (keystore->key_search.state) {
     statecase(keystore->key_search.state, KSEARCH_INIT)
         r = ifapi_keystore_list_all(keystore,
@@ -1206,6 +1209,7 @@ cleanup:
         r = TSS2_FAPI_RC_KEY_NOT_FOUND;
     }
     keystore->key_search.state = KSEARCH_INIT;
+    ifapi_cleanup_ifapi_object(&object);
     return r;
 }
 
@@ -1652,7 +1656,7 @@ ifapi_copy_ifapi_key_object(IFAPI_OBJECT * dest, const IFAPI_OBJECT * src) {
 
     dest->objectType = src->objectType;
     dest->system = src->system;
-    dest->handle = src->handle;
+    dest->public.handle = src->public.handle;
     dest->authorization_state = src->authorization_state;
 
     return r;
@@ -1698,7 +1702,7 @@ ifapi_copy_ifapi_hierarchy_object(IFAPI_OBJECT * dest, const IFAPI_OBJECT * src)
 
     dest->objectType = src->objectType;
     dest->system = src->system;
-    dest->handle = src->handle;
+    dest->public.handle = src->public.handle;
     dest->authorization_state = src->authorization_state;
 
     return r;

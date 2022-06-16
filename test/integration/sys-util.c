@@ -48,7 +48,7 @@ create_primary_rsa_2048_aes_128_cfb (
     /* session parameters */
     /* command session info */
     TSS2L_SYS_AUTH_COMMAND  sessions_cmd = {
-        .auths = {{ .sessionHandle = TPM2_RS_PW }},
+        .auths = {{ .sessionHandle = TPM2_RH_PW }},
         .count = 1
     };
     /* response session info */
@@ -136,7 +136,7 @@ create_aes_128_cfb (
     /* session parameters */
     /* command session info */
     TSS2L_SYS_AUTH_COMMAND  sessions_cmd = {
-        .auths = {{ .sessionHandle = TPM2_RS_PW }},
+        .auths = {{ .sessionHandle = TPM2_RH_PW }},
         .count = 1
     };
     /* response session info */
@@ -207,7 +207,7 @@ create_keyedhash_key (
     /* session parameters */
     /* command session info */
     TSS2L_SYS_AUTH_COMMAND  sessions_cmd = {
-        .auths = {{ .sessionHandle = TPM2_RS_PW }},
+        .auths = {{ .sessionHandle = TPM2_RH_PW }},
         .count = 1
     };
     /* response session info */
@@ -260,7 +260,7 @@ tpm_encrypt_decrypt_cfb (
     /* command session info */
     /* command session info */
     TSS2L_SYS_AUTH_COMMAND  sessions_cmd = {
-        .auths = {{ .sessionHandle = TPM2_RS_PW }},
+        .auths = {{ .sessionHandle = TPM2_RH_PW }},
         .count = 1
     };
     /* response session info */
@@ -317,7 +317,7 @@ tpm_encrypt_decrypt_2_cfb (
     /* command session info */
     /* command session info */
     TSS2L_SYS_AUTH_COMMAND  sessions_cmd = {
-        .auths = {{ .sessionHandle = TPM2_RS_PW }},
+        .auths = {{ .sessionHandle = TPM2_RH_PW }},
         .count = 1
     };
     /* response session info */
@@ -454,6 +454,29 @@ encrypt_cfb (
     return encrypt_decrypt_cfb(data_out, data_in, NO, key, iv);
 }
 
+#if HAVE_EVP_SM3 && !defined(OPENSSL_NO_SM3)
+static unsigned char *SM3(const unsigned char *d, size_t n, unsigned char *md)
+{
+    EVP_MD_CTX *ctx;
+    static unsigned char m[TPM2_SM3_256_DIGEST_SIZE] = { 0 };
+    uint32_t mdLen = TPM2_SM3_256_DIGEST_SIZE;
+
+    if (md == NULL) {
+        md = m;
+    }
+    ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_sm3(), NULL);
+    EVP_DigestUpdate(ctx, d, n);
+    EVP_DigestFinal_ex(ctx, md, &mdLen);
+    if (mdLen != TPM2_SM3_256_DIGEST_SIZE) {
+        EVP_MD_CTX_free(ctx);
+        return NULL;
+    }
+    EVP_MD_CTX_free(ctx);
+    return md;
+}
+#endif
+
 TSS2_RC
 hash (
     TPM2_ALG_ID alg,
@@ -478,6 +501,12 @@ hash (
         SHA512(data, size, out->buffer);
         out->size = TPM2_SHA512_DIGEST_SIZE;
         break;
+#if HAVE_EVP_SM3 && !defined(OPENSSL_NO_SM3)
+    case TPM2_ALG_SM3_256:
+        SM3(data, size, out->buffer);
+        out->size = TPM2_SM3_256_DIGEST_SIZE;
+        break;
+#endif
     default:
         return TSS2_SYS_RC_BAD_VALUE;
     }
@@ -526,6 +555,12 @@ hmac(
         evp = (EVP_MD *) EVP_sha512();
         out->size = TPM2_SHA512_DIGEST_SIZE;
         break;
+#if HAVE_EVP_SM3 && !defined(OPENSSL_NO_SM3)
+    case TPM2_ALG_SM3_256:
+        evp = (EVP_MD *) EVP_sm3();
+        out->size = TPM2_SM3_256_DIGEST_SIZE;
+        break;
+#endif
     default:
         rc = TSS2_SYS_RC_BAD_VALUE;
         goto out;
@@ -693,7 +728,7 @@ DefineNvIndex (
         .count = 1,
         .auths = {
             {
-                .sessionHandle = TPM2_RS_PW,
+                .sessionHandle = TPM2_RH_PW,
                 .sessionAttributes = 0,
                 .nonce = { .size = 0 },
                 .hmac = { .size = 0 },
